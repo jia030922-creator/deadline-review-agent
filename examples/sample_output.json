@@ -1,0 +1,49 @@
+{
+  "task_status": "ON_TIME",
+  "final_decision": "PASS",
+  "confidence": 0.98,
+  "criteria_results": [
+    {
+      "criterion": "README 包含本地运行说明",
+      "status": "PASS",
+      "evidence": [
+        "提交说明：已完成 README，README 包含本地运行说明",
+        "证据链接：https://example.com/deadline-review-agent"
+      ],
+      "reason": "提交说明包含与该标准直接对应的肯定性文本证据。",
+      "suggested_action": "无需修改；建议保留当前证据以便追溯。"
+    },
+    {
+      "criterion": "至少包含 5 个 pytest 测试",
+      "status": "PASS",
+      "evidence": [
+        "提交说明：已经提供测试，至少包含 5 个 pytest 测试",
+        "证据链接：https://example.com/deadline-review-agent"
+      ],
+      "reason": "提交说明包含与该标准直接对应的肯定性文本证据。",
+      "suggested_action": "无需修改；建议保留当前证据以便追溯。"
+    },
+    {
+      "criterion": "无 API Key 时可以运行",
+      "status": "PASS",
+      "evidence": [
+        "提交说明：已实现无 API Key 时可以运行",
+        "证据链接：https://example.com/deadline-review-agent"
+      ],
+      "reason": "提交说明包含与该标准直接对应的肯定性文本证据。",
+      "suggested_action": "无需修改；建议保留当前证据以便追溯。"
+    }
+  ],
+  "next_actions": [
+    "所有验收标准均已通过，无需修改；请归档交付证据。"
+  ],
+  "intermediate_steps": [
+    {
+      "step_name": "validate_input",
+      "tool": "Pydantic",
+      "status": "SUCCESS",
+      "summary": "输入字段与类型校验通过。"
+    }
+  ],
+  "evaluation_mode": "rule_based"
+}

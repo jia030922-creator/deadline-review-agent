@@ -1,320 +1,135 @@
 # Deadline Review Agent
 
-一个用于任务交付验收的 AI Agent 原型。
+Deadline Review Agent 是一个任务交付验收 Agent。它接收任务标题、截止时间、提交时间、验收标准、提交说明和证据链接，输出逐项验收结果、最终决策、置信度、下一步建议与完整的中间步骤。
 
-Deadline Review Agent 接收任务要求、截止时间、验收标准、提交内容和证据链接，按照预设工作流完成时间检查、验收标准解析、证据评估、决策汇总，并返回结构化的验收结果。
+Day 1 MVP 默认使用可解释、可重复运行的确定性规则，不需要 API Key，也不依赖 LangChain。它不是通用聊天机器人、Todo List 或文件内容解析器。
 
-项目支持在没有 API Key 的情况下使用规则模式完整运行，并为后续接入 LLM 语义评估预留了扩展接口。
+## 为什么它是 Agent
 
-## 项目背景
-
-传统待办工具通常只能记录任务是否完成，却很难进一步回答：
-
-* 任务是否按时提交？
-* 提交内容是否满足每一条验收标准？
-* 当前证据是否足够？
-* 哪些项目需要修改？
-* 哪些结果必须由人工复核？
-
-Deadline Review Agent 来自 Deadline Box 的任务交付场景，目标是把“任务已提交”进一步转化为“任务是否可以通过验收”的结构化判断。
-
-## 为什么这是一个 Agent
-
-本项目不是通用聊天机器人。
-
-Deadline Review Agent 具备明确的任务目标和执行流程：
-
-1. 接收任务及交付信息；
-2. 调用截止时间检查工具；
-3. 将自然语言验收标准解析为检查项；
-4. 调用规则评估工具检查提交证据；
-5. 汇总各项验收结果；
-6. 生成最终决策和修改建议；
-7. 保存中间步骤与最终日志；
-8. 在无法可靠判断时主动标记人工复核。
-
-Agent 不仅输出自然语言评价，还会返回可审计的结构化结果。
+它不是一次性的文本分类函数，而是围绕明确目标自主执行一组有顺序的工具步骤：校验输入、判断迟交、解析标准、逐项评估、聚合决策、生成建议、计算置信度、记录过程并保存结果。每一步都有结构化状态和摘要，最终输出也由 Pydantic Schema 约束，因此过程可审计、结果可供其他程序继续使用。
 
 ## 核心工作流
 
-```text
-任务输入
-  ↓
-输入校验
-  ↓
-截止时间检查
-  ↓
-验收标准解析
-  ↓
-逐项证据评估
-  ↓
-最终决策聚合
-  ↓
-修改建议生成
-  ↓
-中间步骤与结果日志
-```
+1. `validate input`：Pydantic 校验输入类型和必要字段。
+2. `check deadline`：输出 `ON_TIME` 或 `LATE`，并计算迟交分钟数。
+3. `parse criteria`：去除空白标准和完全重复项，保留原顺序。
+4. `evaluate each criterion`：用规则模式逐项输出 `PASS`、`FAIL` 或 `NEEDS_REVIEW`。
+5. `aggregate decision`：聚合为 `PASS`、`LATE_PASS`、`NEEDS_REVISION`、`FAIL` 或 `NEEDS_REVIEW`。
+6. 生成下一步建议并计算置信度。
+7. 记录中间步骤，尽力将输入、过程和输出保存到 `logs/`。
+8. 返回可序列化为 JSON 的结构化结果。
 
-## 核心能力
+## 规则模式
 
-* 判断任务是按时提交还是迟交；
-* 将多条验收标准转换为结构化检查项；
-* 根据提交文本和证据链接进行规则评估；
-* 区分 `PASS`、`FAIL` 和 `NEEDS_REVIEW`；
-* 汇总生成最终验收结论；
-* 输出置信度和下一步修改建议；
-* 保存完整中间步骤；
-* 在日志写入失败时保证主工作流继续运行；
-* 无 API Key 也可以完整运行。
+- `PASS`：提交说明中存在与标准直接对应的肯定性文本证据。证据链接可以辅助说明，但链接本身不会让所有标准自动通过。
+- `FAIL`：提交说明中出现与该标准相关的明确冲突，例如“未完成”“缺少”“不支持”或 `missing`、`failed`。
+- `NEEDS_REVIEW`：没有足够正面证据，也没有明确冲突。关键词不存在不会被直接当成失败。
 
-## 状态说明
+明确冲突优先于正面表达。Day 1 不访问证据链接，也不读取文件内容，因此仅有链接时会保守地要求人工复核。
 
-### 任务时间状态
+决策聚合规则：
 
-| 状态        | 含义             |
-| --------- | -------------- |
-| `ON_TIME` | 在截止时间前或截止时间时提交 |
-| `LATE`    | 超过截止时间提交       |
-
-### 单项验收状态
-
-| 状态             | 含义                 |
-| -------------- | ------------------ |
-| `PASS`         | 当前证据能够直接支持该验收标准    |
-| `FAIL`         | 当前提交内容明确违反该验收标准    |
-| `NEEDS_REVIEW` | 现有证据不足，需要补充信息或人工复核 |
-
-### 最终验收结论
-
-| 状态               | 含义                  |
-| ---------------- | ------------------- |
-| `PASS`           | 按时提交，所有验收标准均通过      |
-| `LATE_PASS`      | 迟交，但所有验收标准均通过       |
-| `NEEDS_REVISION` | 存在明确未满足的验收标准，需要修改   |
-| `FAIL`           | 提交内容严重缺失或无法进行有效验收   |
-| `NEEDS_REVIEW`   | 没有明确失败项，但部分标准无法自动确认 |
+- 全部 `PASS` 且按时：`PASS`
+- 全部 `PASS` 但迟交：`LATE_PASS`
+- 存在明确 `FAIL`：`NEEDS_REVISION`
+- 无 `FAIL` 但存在 `NEEDS_REVIEW`：`NEEDS_REVIEW`
+- 提交说明和证据均为空等明显空提交：`FAIL`
 
 ## 技术栈
 
-* Python
-* Streamlit
-* Pydantic
-* pytest
-
-当前版本未使用 LangChain，也不依赖向量数据库。
+- Python 3.10+
+- Pydantic 2
+- Streamlit
+- pytest
 
 ## 项目结构
 
 ```text
-deadline-review-agent/
-├── README.md
-├── AGENTS.md
-├── app.py
+.
 ├── agent/
 │   ├── __init__.py
-│   ├── workflow.py
-│   ├── tools.py
 │   ├── schemas.py
+│   ├── tools.py
+│   ├── workflow.py
 │   └── prompts.py
 ├── examples/
 │   ├── sample_input.json
 │   └── sample_output.json
-├── tests/
-│   └── test_workflow.py
 ├── logs/
 │   └── .gitkeep
-├── .env.example
-├── .gitignore
-└── requirements.txt
+├── tests/
+│   └── test_workflow.py
+├── app.py
+├── requirements.txt
+└── README.md
 ```
 
 ## 本地运行
 
-### 1. 克隆仓库
-
-```bash
-git clone <仓库地址>
-cd deadline-review-agent
-```
-
-### 2. 创建虚拟环境
-
-Windows PowerShell：
+在项目根目录执行：
 
 ```powershell
 python -m venv .venv
 .venv\Scripts\Activate.ps1
+python -m pip install -r requirements.txt
+python -m streamlit run app.py
 ```
 
-macOS 或 Linux：
+浏览器打开 Streamlit 显示的本地地址。页面支持“加载示例”，可直接填充一组可演示数据。
 
-```bash
-python3 -m venv .venv
-source .venv/bin/activate
+不启动页面时，也可以在 Python 中调用：
+
+```python
+import json
+
+from agent.workflow import DeadlineReviewAgent
+
+payload = json.loads(open("examples/sample_input.json", encoding="utf-8").read())
+result = DeadlineReviewAgent().run(payload)
+print(result.model_dump_json(indent=2))
 ```
 
-### 3. 安装依赖
+## 示例输入输出
 
-```bash
-pip install -r requirements.txt
-```
+完整示例见：
 
-### 4. 启动应用
+- `examples/sample_input.json`
+- `examples/sample_output.json`
 
-```bash
-streamlit run app.py
-```
+输出包含：
 
-浏览器通常会自动打开：
-
-```text
-http://localhost:8501
+```json
+{
+  "task_status": "ON_TIME",
+  "final_decision": "PASS",
+  "confidence": 0.98,
+  "criteria_results": [],
+  "next_actions": [],
+  "intermediate_steps": [],
+  "evaluation_mode": "rule_based"
+}
 ```
 
 ## 运行测试
 
-```bash
-pytest -v
+```powershell
+python -m pytest -q
 ```
 
-## 示例输入
+测试覆盖按时通过、迟交通过、明确违反、缺少证据、无效验收标准、标准清理、空提交和日志写入失败兜底。
 
-```json
-{
-  "task_title": "完成一版 AI 产品经理简历",
-  "due_at": "2026-07-19T22:00:00",
-  "submitted_at": "2026-07-19T22:30:00",
-  "acceptance_criteria": [
-    "必须是 PDF 格式",
-    "包含 AI 玩偶、Dify 和 Deadline Box 三个项目",
-    "每个项目至少包含一项可量化成果",
-    "简历控制在一页"
-  ],
-  "submission_text": "已完成简历，包含 AI 玩偶、Dify 和 Deadline Box 三个项目，目前是两页，其中 Deadline Box 有 GitHub 链接。",
-  "evidence_links": [
-    "https://github.com/example/deadline-box"
-  ]
-}
-```
+## 日志与安全
 
-## 示例输出
+每次运行会尝试在 `logs/` 下生成带 UTC 时间戳的 JSON 文件。日志函数会递归移除名称包含 `api_key`、`token` 或 `secret` 的字段。日志写入失败不会中断主流程，返回结果的最后一个中间步骤会标为 `WARNING`。
 
-```json
-{
-  "task_status": "LATE",
-  "final_decision": "NEEDS_REVISION",
-  "confidence": 0.88,
-  "evaluation_mode": "rule_based",
-  "criteria_results": [
-    {
-      "criterion": "必须是 PDF 格式",
-      "status": "NEEDS_REVIEW",
-      "evidence": "提交内容未提供可验证的 PDF 文件信息",
-      "reason": "现有证据无法确认文件格式",
-      "suggested_action": "补充 PDF 文件或可访问的文件链接"
-    },
-    {
-      "criterion": "包含 AI 玩偶、Dify 和 Deadline Box 三个项目",
-      "status": "PASS",
-      "evidence": "提交文本明确提到了 AI 玩偶、Dify 和 Deadline Box",
-      "reason": "三个指定项目名称均出现在提交说明中",
-      "suggested_action": ""
-    },
-    {
-      "criterion": "每个项目至少包含一项可量化成果",
-      "status": "NEEDS_REVIEW",
-      "evidence": "提交说明未列出各项目的量化成果",
-      "reason": "现有文本不足以验证每个项目是否包含量化结果",
-      "suggested_action": "为每个项目补充至少一项可量化成果"
-    },
-    {
-      "criterion": "简历控制在一页",
-      "status": "FAIL",
-      "evidence": "提交文本说明当前简历为两页",
-      "reason": "提交内容明确违反一页限制",
-      "suggested_action": "压缩简历内容，将总页数调整为一页"
-    }
-  ],
-  "next_actions": [
-    "将简历压缩至一页",
-    "补充 PDF 文件或可访问链接",
-    "为每个项目补充至少一项可量化成果"
-  ]
-}
-```
+## LLM 扩展预留
 
-## 规则模式与 LLM 模式
-
-当前版本默认使用规则模式：
-
-```text
-evaluation_mode = rule_based
-```
-
-规则模式不需要 API Key，可以完成：
-
-* 时间判断；
-* 明确关键词和直接证据检查；
-* 明确冲突识别；
-* 缺失证据识别；
-* 决策聚合；
-* 修改建议生成。
-
-后续版本将支持可选的 LLM 语义评估模式。
-
-当配置了模型 API Key 时，Agent 可以使用 LLM 处理更复杂的语义验收标准；当 API 调用失败、超时或返回非法结构时，系统将回退到规则模式，并将低置信度项目标记为 `NEEDS_REVIEW`。
-
-## 设计原则
-
-### 1. 不把无法确认的结果强行判为通过
-
-如果当前证据不足，Agent 会返回：
-
-```text
-NEEDS_REVIEW
-```
-
-而不是猜测任务已经满足要求。
-
-### 2. 规则检查与语义评估分离
-
-确定性规则负责时间、字段、链接和明确冲突检查；LLM 只作为后续可选的语义增强能力。
-
-### 3. 输出可审计
-
-每次验收都会保留：
-
-* 使用的工具；
-* 中间步骤；
-* 单项判断；
-* 判断依据；
-* 最终决策；
-* 下一步建议。
-
-### 4. 失败不影响主流程
-
-日志保存失败或可选模型调用失败时，Agent 应继续返回可用结果，而不是让整个验收流程崩溃。
+`agent/prompts.py` 提供 Day 2 语义评估 Prompt 占位，输出保留 `evaluation_mode` 字段。未来可以添加独立 evaluator 并在失败时回退到现有规则工具，不需要引入 LangChain。
 
 ## 当前限制
 
-* 规则模式主要依赖提交文本中的直接证据；
-* 当前版本不会自动访问证据链接并读取网页内容；
-* 当前版本不会解析 PDF、Word 或图片文件；
-* 对复杂、隐含或主观的验收标准，可能需要人工复核；
-* 置信度是工作流内部的启发式评分，不代表统计学概率；
-* LLM 语义评估将在后续版本中完善。
-
-## 后续计划
-
-* 接入可选 LLM 语义评估；
-* 增加模型调用超时、重试和结构校验；
-* 支持文件内容解析；
-* 支持证据链接访问与验证；
-* 增加更多边界测试和评估数据集；
-* 与 Deadline Box 的任务数据进行集成。
-
-## 项目来源
-
-Deadline Review Agent 来源于个人项目 Deadline Box 的任务交付场景。
-
-Deadline Box 负责创建任务、设置截止时间、记录提交和保存历史；Deadline Review Agent 则专注于对交付内容进行自动化验收和结构化判断。
+- 规则模式只能分析提交说明文本，不能理解同义表达的全部变化。
+- 不访问网页，不验证证据链接内容。
+- 不上传或解析文件。
+- 不调用真实 LLM API。
+- 不含认证、数据库、多 Agent、支付或无关生产力功能。

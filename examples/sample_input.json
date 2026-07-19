@@ -1,0 +1,14 @@
+{
+  "task_title": "完成 Deadline Review Agent Day 1 MVP",
+  "due_at": "2026-07-19T18:00:00+08:00",
+  "submitted_at": "2026-07-19T17:40:00+08:00",
+  "acceptance_criteria": [
+    "README 包含本地运行说明",
+    "至少包含 5 个 pytest 测试",
+    "无 API Key 时可以运行"
+  ],
+  "submission_text": "已完成 README，README 包含本地运行说明。已经提供测试，至少包含 5 个 pytest 测试。已实现无 API Key 时可以运行。",
+  "evidence_links": [
+    "https://example.com/deadline-review-agent"
+  ]
+}
