@@ -1,4 +1,4 @@
-"""Streamlit UI for the Deadline Review Agent Day 1 MVP."""
+"""Streamlit UI for the Deadline Review Agent."""
 
 from __future__ import annotations
 
@@ -9,7 +9,8 @@ from pathlib import Path
 import streamlit as st
 from pydantic import ValidationError
 
-from agent.schemas import ReviewInput
+from agent.file_tools import parse_uploaded_file
+from agent.schemas import FileEvidence, FileParseStatus, ReviewInput
 from agent.workflow import DeadlineReviewAgent
 
 
@@ -55,11 +56,35 @@ def lines(value: str) -> list[str]:
     return [line.strip() for line in value.splitlines() if line.strip()]
 
 
+def parse_uploads(uploaded: list[object]) -> list[FileEvidence]:
+    """Convert Streamlit upload objects into serializable evidence models."""
+
+    results: list[FileEvidence] = []
+    for item in uploaded:
+        filename = getattr(item, "name", "unnamed")
+        mime_type = getattr(item, "type", None)
+        try:
+            file_bytes = item.getvalue()  # type: ignore[attr-defined]
+            results.append(parse_uploaded_file(filename, file_bytes, mime_type))
+        except Exception as exc:
+            results.append(
+                FileEvidence(
+                    filename=filename,
+                    extension=Path(filename).suffix.casefold(),
+                    mime_type=mime_type,
+                    size_bytes=0,
+                    parse_status=FileParseStatus.FAILED,
+                    parse_error=f"上传文件处理失败：{str(exc)[:200]}",
+                )
+            )
+    return results
+
+
 st.set_page_config(page_title="Deadline Review Agent", page_icon="✅", layout="wide")
 initialize_defaults()
 
 st.title("Deadline Review Agent")
-st.caption("用可追溯的规则工作流检查任务是否按时提交、是否满足逐项验收标准。")
+st.caption("用提交说明、证据链接和真实文件证据，执行可追溯的任务交付验收。")
 st.button("加载示例", on_click=load_sample)
 
 with st.form("review_form"):
@@ -79,10 +104,17 @@ with st.form("review_form"):
     )
     st.text_area("提交内容", key="submission_text", height=180)
     st.text_area("证据链接（每行一个）", key="evidence_links", height=100)
+    uploaded = st.file_uploader(
+        "交付文件（可多选，单个文件建议不超过 5 MB）",
+        type=["pdf", "txt", "md", "json"],
+        accept_multiple_files=True,
+        help="支持 PDF、TXT、Markdown 和 JSON；证据链接不会被联网打开。",
+    )
     submitted = st.form_submit_button("开始验收", type="primary", use_container_width=True)
 
 if submitted:
     try:
+        file_evidence = parse_uploads(uploaded)
         payload = ReviewInput(
             task_title=st.session_state.task_title,
             due_at=datetime.combine(st.session_state.due_date, st.session_state.due_time),
@@ -90,6 +122,7 @@ if submitted:
             acceptance_criteria=lines(st.session_state.acceptance_criteria),
             submission_text=st.session_state.submission_text,
             evidence_links=lines(st.session_state.evidence_links),
+            uploaded_files=file_evidence,
         )
         result = DeadlineReviewAgent(log_dir=ROOT / "logs").run(payload)
     except ValidationError as exc:
@@ -106,9 +139,49 @@ if submitted:
         second.metric("时间状态", result.task_status.value)
         third.metric("置信度", f"{result.confidence:.0%}")
 
+        st.subheader("文件解析摘要")
+        st.write(result.file_evidence_summary)
+        if result.file_evidence_results:
+            for index, file in enumerate(result.file_evidence_results, start=1):
+                page_label = f" · {file.page_count} 页" if file.page_count is not None else ""
+                with st.expander(
+                    f"{index}. [{file.parse_status.value}] {file.filename} · "
+                    f"{file.extension or '未知类型'} · {file.size_bytes:,} 字节{page_label}"
+                ):
+                    st.write(f"MIME 类型：{file.mime_type or '未知'}")
+                    st.write(f"解析状态：{file.parse_status.value}")
+                    if file.parse_error:
+                        st.warning(file.parse_error)
+                    if file.extracted_text:
+                        preview = file.extracted_text[:2_000]
+                        st.text_area(
+                            "提取文本预览（最多 2,000 字符）",
+                            preview,
+                            height=220,
+                            disabled=True,
+                            key=f"file_preview_{index}",
+                        )
+                        if len(file.extracted_text) > len(preview) or file.text_truncated:
+                            st.caption("预览或提取文本已截断。")
+        else:
+            st.info("本次未上传文件，验收继续使用提交说明和证据链接。")
+
         st.subheader("逐项验收结果")
         for index, item in enumerate(result.criteria_results, start=1):
             with st.expander(f"{index}. [{item.status.value}] {item.criterion}", expanded=True):
+                st.caption(
+                    f"证据类型：{item.evidence_type.value} · 证据来源：{item.evidence_source.value}"
+                )
+                if item.source_files:
+                    st.write(f"来源文件：{'、'.join(item.source_files)}")
+                if item.conflict_detected:
+                    st.error("发现用户提交说明与真实文件证据冲突；本项以文件证据为准。")
+                if (
+                    not item.source_files
+                    and item.evidence_type.value
+                    in {"FILE_FORMAT", "FILE_PAGE_COUNT", "FILE_CONTENT", "JSON_VALIDITY"}
+                ):
+                    st.warning("仅有用户声明，尚未通过真实文件验证。")
                 st.write(item.reason)
                 if item.evidence:
                     st.markdown("**证据**")

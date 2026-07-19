@@ -1,27 +1,35 @@
 {
   "task_status": "ON_TIME",
-  "final_decision": "PASS",
-  "confidence": 0.98,
+  "final_decision": "NEEDS_REVIEW",
+  "confidence": 0.75,
   "criteria_results": [
     {
       "criterion": "README 包含本地运行说明",
-      "status": "PASS",
+      "status": "NEEDS_REVIEW",
       "evidence": [
-        "提交说明：已完成 README，README 包含本地运行说明",
-        "证据链接：https://example.com/deadline-review-agent"
+        "仅有用户声明：已完成 README，README 包含本地运行说明",
+        "未读取的证据链接：https://example.com/deadline-review-agent"
       ],
-      "reason": "提交说明包含与该标准直接对应的肯定性文本证据。",
-      "suggested_action": "无需修改；建议保留当前证据以便追溯。"
+      "reason": "仅有用户声明，没有可验证文件证据。",
+      "suggested_action": "请上传可完整提取文本的文件以验证必需内容。",
+      "evidence_type": "FILE_CONTENT",
+      "evidence_source": "MIXED",
+      "source_files": [],
+      "conflict_detected": false
     },
     {
       "criterion": "至少包含 5 个 pytest 测试",
-      "status": "PASS",
+      "status": "NEEDS_REVIEW",
       "evidence": [
-        "提交说明：已经提供测试，至少包含 5 个 pytest 测试",
-        "证据链接：https://example.com/deadline-review-agent"
+        "仅有用户声明：已经提供测试，至少包含 5 个 pytest 测试",
+        "未读取的证据链接：https://example.com/deadline-review-agent"
       ],
-      "reason": "提交说明包含与该标准直接对应的肯定性文本证据。",
-      "suggested_action": "无需修改；建议保留当前证据以便追溯。"
+      "reason": "仅有用户声明，没有可验证文件证据。",
+      "suggested_action": "请上传可完整提取文本的文件以验证必需内容。",
+      "evidence_type": "FILE_CONTENT",
+      "evidence_source": "MIXED",
+      "source_files": [],
+      "conflict_detected": false
     },
     {
       "criterion": "无 API Key 时可以运行",
@@ -30,20 +38,26 @@
         "提交说明：已实现无 API Key 时可以运行",
         "证据链接：https://example.com/deadline-review-agent"
       ],
-      "reason": "提交说明包含与该标准直接对应的肯定性文本证据。",
-      "suggested_action": "无需修改；建议保留当前证据以便追溯。"
+      "reason": "该标准属于提交说明可验证类型，提交说明包含直接对应的肯定性陈述。",
+      "suggested_action": "无需修改；建议保留当前提交说明以便追溯。",
+      "evidence_type": "SUBMISSION_STATEMENT",
+      "evidence_source": "MIXED",
+      "source_files": [],
+      "conflict_detected": false
     }
   ],
   "next_actions": [
-    "所有验收标准均已通过，无需修改；请归档交付证据。"
+    "请上传可完整提取文本的文件以验证必需内容。"
   ],
   "intermediate_steps": [
     {
-      "step_name": "validate_input",
-      "tool": "Pydantic",
+      "step_name": "evidence_conflict_detection",
+      "tool": "criterion evidence comparison",
       "status": "SUCCESS",
-      "summary": "输入字段与类型校验通过。"
+      "summary": "未发现用户声明与成功解析文件之间的证据冲突。"
     }
   ],
-  "evaluation_mode": "rule_based"
+  "evaluation_mode": "rule_based",
+  "file_evidence_results": [],
+  "file_evidence_summary": "未上传文件证据；继续使用提交说明和证据链接进行验收。"
 }

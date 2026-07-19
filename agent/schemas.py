@@ -32,6 +32,54 @@ class EvaluationMode(str, Enum):
     LLM = "llm"
 
 
+class FileParseStatus(str, Enum):
+    SUCCESS = "SUCCESS"
+    PARTIAL = "PARTIAL"
+    FAILED = "FAILED"
+    UNSUPPORTED = "UNSUPPORTED"
+
+
+class CriterionEvidenceType(str, Enum):
+    FILE_FORMAT = "FILE_FORMAT"
+    FILE_PAGE_COUNT = "FILE_PAGE_COUNT"
+    FILE_CONTENT = "FILE_CONTENT"
+    JSON_VALIDITY = "JSON_VALIDITY"
+    LINK_PRESENCE = "LINK_PRESENCE"
+    SUBMISSION_STATEMENT = "SUBMISSION_STATEMENT"
+    MANUAL_REVIEW = "MANUAL_REVIEW"
+
+
+class EvidenceSource(str, Enum):
+    FILE_METADATA = "FILE_METADATA"
+    FILE_CONTENT = "FILE_CONTENT"
+    SUBMISSION_TEXT = "SUBMISSION_TEXT"
+    EVIDENCE_LINK = "EVIDENCE_LINK"
+    MIXED = "MIXED"
+    NONE = "NONE"
+
+
+class FileEvidence(BaseModel):
+    """Serializable evidence extracted from one uploaded file."""
+
+    model_config = ConfigDict(str_strip_whitespace=True)
+
+    filename: str
+    extension: str
+    mime_type: str | None = None
+    size_bytes: int = Field(ge=0)
+    page_count: int | None = Field(default=None, ge=0)
+    extracted_text: str = ""
+    parse_status: FileParseStatus
+    parse_error: str | None = None
+    text_truncated: bool = False
+
+    @field_validator("extension")
+    @classmethod
+    def normalize_extension(cls, value: str) -> str:
+        cleaned = value.strip().casefold()
+        return f".{cleaned}" if cleaned and not cleaned.startswith(".") else cleaned
+
+
 class ReviewInput(BaseModel):
     """Validated input for one delivery review."""
 
@@ -43,6 +91,7 @@ class ReviewInput(BaseModel):
     acceptance_criteria: list[str] = Field(min_length=1)
     submission_text: str = ""
     evidence_links: list[str] = Field(default_factory=list)
+    uploaded_files: list[FileEvidence] = Field(default_factory=list)
 
     @field_validator("acceptance_criteria")
     @classmethod
@@ -74,6 +123,10 @@ class CriterionResult(BaseModel):
     evidence: list[str] = Field(default_factory=list)
     reason: str
     suggested_action: str
+    evidence_type: CriterionEvidenceType = CriterionEvidenceType.MANUAL_REVIEW
+    evidence_source: EvidenceSource = EvidenceSource.NONE
+    source_files: list[str] = Field(default_factory=list)
+    conflict_detected: bool = False
 
 
 class IntermediateStep(BaseModel):
@@ -91,3 +144,5 @@ class ReviewOutput(BaseModel):
     next_actions: list[str]
     intermediate_steps: list[IntermediateStep]
     evaluation_mode: EvaluationMode = EvaluationMode.RULE_BASED
+    file_evidence_results: list[FileEvidence] = Field(default_factory=list)
+    file_evidence_summary: str = "未上传文件证据。"
