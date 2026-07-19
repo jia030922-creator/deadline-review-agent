@@ -1,0 +1,119 @@
+{
+  "task_status": "ON_TIME",
+  "final_decision": "PASS",
+  "confidence": 0.88,
+  "criteria_results": [
+    {
+      "criterion": "必须提交 PDF",
+      "status": "PASS",
+      "evidence": ["文件 resume.pdf：PDF，解析状态 SUCCESS"],
+      "reason": "已上传可识别的 PDF 文件，满足格式要求。",
+      "suggested_action": "无需修改；请保留该 PDF。",
+      "evidence_type": "FILE_FORMAT",
+      "evidence_source": "FILE_METADATA",
+      "source_files": ["resume.pdf"],
+      "conflict_detected": false,
+      "evaluated_by": "deterministic_rule",
+      "rule_status_before_llm": null,
+      "llm_metadata": {"attempted": false, "success": false, "model": null, "latency_ms": 0, "error_type": null, "safe_error_message": null, "fallback_used": false}
+    },
+    {
+      "criterion": "简历控制在一页",
+      "status": "PASS",
+      "evidence": ["文件 resume.pdf：实际 1 页"],
+      "reason": "实际 PDF 页数不超过 1 页。",
+      "suggested_action": "无需修改。",
+      "evidence_type": "FILE_PAGE_COUNT",
+      "evidence_source": "FILE_METADATA",
+      "source_files": ["resume.pdf"],
+      "conflict_detected": false,
+      "evaluated_by": "deterministic_rule",
+      "rule_status_before_llm": null,
+      "llm_metadata": {"attempted": false, "success": false, "model": null, "latency_ms": 0, "error_type": null, "safe_error_message": null, "fallback_used": false}
+    },
+    {
+      "criterion": "文档中必须包含 Deadline Box",
+      "status": "PASS",
+      "evidence": ["文件 resume.pdf 命中 Deadline Box：Deadline Box 项目。"],
+      "reason": "在 resume.pdf 中发现全部必需内容。",
+      "suggested_action": "无需修改。",
+      "evidence_type": "FILE_CONTENT",
+      "evidence_source": "FILE_CONTENT",
+      "source_files": ["resume.pdf"],
+      "conflict_detected": false,
+      "evaluated_by": "deterministic_rule",
+      "rule_status_before_llm": null,
+      "llm_metadata": {"attempted": false, "success": false, "model": null, "latency_ms": 0, "error_type": null, "safe_error_message": null, "fallback_used": false}
+    },
+    {
+      "criterion": "项目描述应清楚说明问题、解决方案和结果",
+      "status": "PASS",
+      "evidence": ["文件明确给出问题、解决方案和量化结果。", "LLM 引用片段：问题：团队经常错过截止时间。解决方案：实现截止提醒。结果：迟交率下降 30%。"],
+      "reason": "文件片段形成了清楚的问题—方案—结果链路。",
+      "suggested_action": "保留当前结构，并补充结果统计口径。",
+      "evidence_type": "MANUAL_REVIEW",
+      "evidence_source": "FILE_CONTENT",
+      "source_files": ["resume.pdf"],
+      "conflict_detected": false,
+      "evaluated_by": "llm_semantic_review",
+      "rule_status_before_llm": "NEEDS_REVIEW",
+      "llm_metadata": {"attempted": true, "success": true, "model": "configured-model", "latency_ms": 820, "error_type": null, "safe_error_message": null, "fallback_used": false},
+      "llm_evaluation": {
+        "status": "PASS",
+        "confidence": 0.86,
+        "evidence": ["文件明确给出问题、解决方案和量化结果。"],
+        "reason": "文件片段形成了清楚的问题—方案—结果链路。",
+        "suggested_action": "保留当前结构，并补充结果统计口径。",
+        "evidence_excerpt": "问题：团队经常错过截止时间。解决方案：实现截止提醒。结果：迟交率下降 30%。",
+        "limitations": ["仅依据提供的文件片段判断。"]
+      }
+    },
+    {
+      "criterion": "修改建议应具体可执行",
+      "status": "PASS",
+      "evidence": ["建议包含具体动作、负责人和完成日期。", "LLM 引用片段：增加失败重试提示，并为每项建议标注负责人和完成日期。"],
+      "reason": "修改建议包含明确动作与执行要素。",
+      "suggested_action": "执行后补充完成状态和验证结果。",
+      "evidence_type": "MANUAL_REVIEW",
+      "evidence_source": "FILE_CONTENT",
+      "source_files": ["resume.pdf"],
+      "conflict_detected": false,
+      "evaluated_by": "llm_semantic_review",
+      "rule_status_before_llm": "NEEDS_REVIEW",
+      "llm_metadata": {"attempted": true, "success": true, "model": "configured-model", "latency_ms": 760, "error_type": null, "safe_error_message": null, "fallback_used": false},
+      "llm_evaluation": {
+        "status": "PASS",
+        "confidence": 0.84,
+        "evidence": ["建议包含具体动作、负责人和完成日期。"],
+        "reason": "修改建议包含明确动作与执行要素。",
+        "suggested_action": "执行后补充完成状态和验证结果。",
+        "evidence_excerpt": "增加失败重试提示，并为每项建议标注负责人和完成日期。",
+        "limitations": ["仅依据提供的文件片段判断。"]
+      }
+    }
+  ],
+  "next_actions": ["所有验收标准均已通过，无需修改；请归档交付证据。"],
+  "intermediate_steps": [
+    {"step_name": "llm_routing", "tool": "should_use_llm_for_criterion", "status": "SUCCESS", "summary": "5 条标准中，3 条由确定性规则完成，2 条进入 LLM 语义复核。"},
+    {"step_name": "deterministic_result_protection", "tool": "workflow deterministic lock", "status": "SUCCESS", "summary": "已锁定 3 条确定性 PASS/FAIL。"}
+  ],
+  "evaluation_mode": "llm_enhanced",
+  "requested_evaluation_mode": "llm_enabled",
+  "llm_available": true,
+  "llm_model": "configured-model",
+  "llm_fallback_used": false,
+  "file_evidence_results": [
+    {
+      "filename": "resume.pdf",
+      "extension": ".pdf",
+      "mime_type": "application/pdf",
+      "size_bytes": 84211,
+      "page_count": 1,
+      "extracted_text": "Deadline Box 项目。问题：团队经常错过截止时间。解决方案：实现截止提醒和任务验收流程。结果：迟交率下降 30%。修改建议：增加失败重试提示，并为每项建议标注负责人和完成日期。",
+      "parse_status": "SUCCESS",
+      "parse_error": null,
+      "text_truncated": false
+    }
+  ],
+  "file_evidence_summary": "成功解析 resume.pdf，共 1 页。"
+}

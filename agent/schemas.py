@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from datetime import datetime
 from enum import Enum
+from typing import Annotated
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
@@ -29,7 +30,21 @@ class FinalDecision(str, Enum):
 
 class EvaluationMode(str, Enum):
     RULE_BASED = "rule_based"
-    LLM = "llm"
+    LLM_ENHANCED = "llm_enhanced"
+    FALLBACK_RULE_BASED = "fallback_rule_based"
+    LLM = "llm"  # Backward-compatible legacy value; workflow does not emit it.
+
+
+class RequestedEvaluationMode(str, Enum):
+    AUTO = "auto"
+    RULE_ONLY = "rule_only"
+    LLM_ENABLED = "llm_enabled"
+
+
+class EvaluatedBy(str, Enum):
+    DETERMINISTIC_RULE = "deterministic_rule"
+    LLM_SEMANTIC_REVIEW = "llm_semantic_review"
+    MANUAL_REVIEW_REQUIRED = "manual_review_required"
 
 
 class FileParseStatus(str, Enum):
@@ -92,6 +107,7 @@ class ReviewInput(BaseModel):
     submission_text: str = ""
     evidence_links: list[str] = Field(default_factory=list)
     uploaded_files: list[FileEvidence] = Field(default_factory=list)
+    requested_evaluation_mode: RequestedEvaluationMode = RequestedEvaluationMode.AUTO
 
     @field_validator("acceptance_criteria")
     @classmethod
@@ -117,6 +133,40 @@ class DeadlineResult(BaseModel):
     late_minutes: int = Field(ge=0)
 
 
+ShortLLMText = Annotated[str, Field(max_length=500)]
+
+
+class LLMCriterionEvaluation(BaseModel):
+    """Strict semantic-review payload returned by the model."""
+
+    status: CriterionStatus
+    confidence: float = Field(ge=0.0, le=1.0)
+    evidence: list[ShortLLMText] = Field(default_factory=list, max_length=8)
+    reason: str = Field(min_length=1, max_length=1_500)
+    suggested_action: str = Field(min_length=1, max_length=1_000)
+    evidence_excerpt: str = Field(default="", max_length=2_000)
+    limitations: list[ShortLLMText] = Field(default_factory=list, max_length=8)
+
+
+class LLMCallMetadata(BaseModel):
+    attempted: bool = False
+    success: bool = False
+    model: str | None = None
+    latency_ms: int = Field(default=0, ge=0)
+    error_type: str | None = None
+    safe_error_message: str | None = None
+    fallback_used: bool = False
+
+
+class SafeLLMEvaluationResult(BaseModel):
+    success: bool
+    result: LLMCriterionEvaluation | None = None
+    error_type: str | None = None
+    safe_error_message: str | None = None
+    latency_ms: int = Field(default=0, ge=0)
+    model: str | None = None
+
+
 class CriterionResult(BaseModel):
     criterion: str
     status: CriterionStatus
@@ -127,6 +177,10 @@ class CriterionResult(BaseModel):
     evidence_source: EvidenceSource = EvidenceSource.NONE
     source_files: list[str] = Field(default_factory=list)
     conflict_detected: bool = False
+    evaluated_by: EvaluatedBy = EvaluatedBy.DETERMINISTIC_RULE
+    rule_status_before_llm: CriterionStatus | None = None
+    llm_metadata: LLMCallMetadata = Field(default_factory=LLMCallMetadata)
+    llm_evaluation: LLMCriterionEvaluation | None = None
 
 
 class IntermediateStep(BaseModel):
@@ -144,5 +198,9 @@ class ReviewOutput(BaseModel):
     next_actions: list[str]
     intermediate_steps: list[IntermediateStep]
     evaluation_mode: EvaluationMode = EvaluationMode.RULE_BASED
+    requested_evaluation_mode: RequestedEvaluationMode = RequestedEvaluationMode.AUTO
+    llm_available: bool = False
+    llm_model: str | None = None
+    llm_fallback_used: bool = False
     file_evidence_results: list[FileEvidence] = Field(default_factory=list)
     file_evidence_summary: str = "未上传文件证据。"

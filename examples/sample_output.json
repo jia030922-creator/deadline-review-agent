@@ -58,6 +58,10 @@
     }
   ],
   "evaluation_mode": "rule_based",
+  "requested_evaluation_mode": "auto",
+  "llm_available": false,
+  "llm_model": null,
+  "llm_fallback_used": false,
   "file_evidence_results": [],
   "file_evidence_summary": "未上传文件证据；继续使用提交说明和证据链接进行验收。"
 }

@@ -40,7 +40,9 @@ _GENERIC_WORDS = {
 }
 _QUALITATIVE_MARKERS = (
     "创新性", "商业价值", "足够专业", "质量优秀", "代码质量", "用户体验优秀",
-    "美观", "高质量", "professional enough", "commercial value", "innovative",
+    "美观", "高质量", "清楚说明", "表达清晰", "具体可执行", "描述清楚",
+    "professional enough", "commercial value", "innovative", "clearly explain",
+    "actionable",
     "excellent quality",
 )
 _CHINESE_NUMBERS = {
@@ -179,7 +181,10 @@ def _requires_pdf(criterion: str) -> bool:
     compact = re.sub(r"\s+", "", criterion.casefold())
     return any(
         phrase in compact
-        for phrase in ("必须是pdf", "pdf格式", "提交pdf文件", "上传pdf", "pdf文件")
+        for phrase in (
+            "必须是pdf", "必须提交pdf", "提交pdf文件", "提交pdf",
+            "pdf格式", "上传pdf", "pdf文件",
+        )
     )
 
 

@@ -1,117 +1,28 @@
 # Deadline Review Agent
 
-Deadline Review Agent 是一个任务交付验收 Agent。它接收任务标题、截止时间、提交时间、验收标准、提交说明、证据链接和可选交付文件，输出逐项验收结果、最终决策、置信度、下一步建议、文件解析摘要与完整中间步骤。
+一个面向任务交付的结构化验收 Agent：检查截止时间、解析真实文件、逐项执行确定性规则，并可选使用 LLM 复核规则无法判断的语义标准。
 
-Day 2 在保留 Day 1 规则验收能力的基础上，增加真实文件证据解析；Day 2.5 进一步修复了证据优先级。项目默认使用可解释、可重复的确定性规则，无需 API Key，不依赖 LangChain，也不是通用聊天机器人或 Todo List。
+## 输入与输出
 
-## 为什么它是 Agent
+输入包括任务标题、截止/提交时间、验收标准、用户提交说明、证据链接、可选 PDF/TXT/Markdown/JSON 文件和评估模式。输出包括时间状态、逐项证据、最终决策、综合置信度、修改建议、文件解析结果、LLM 审计元数据和完整中间步骤，全部可序列化为 JSON。
 
-系统围绕“判断交付是否满足验收标准”这一目标，自主执行一组有顺序的工具步骤：校验输入、检查截止时间、接收文件解析结果、构建文件证据上下文、解析验收标准、逐项评估、聚合决策、生成建议、计算置信度并安全记录结果。每一步和最终输出均为结构化数据，过程可审计、结果可供程序继续处理。
+## 为什么这是 Agent
 
-## Day 2 文件上传功能
+它围绕“验收任务交付”目标自主编排输入校验、文件解析、标准分类、确定性工具、LLM 路由、语义复核、硬规则保护、决策聚合和审计日志，而不是只生成一段自然语言。
 
-Streamlit 页面支持一次上传多个文件。当前支持：
+## 架构原则
 
-- PDF（`.pdf`）：读取页数，并在 pypdf 能够提取时读取文本；
-- TXT（`.txt`）：支持 UTF-8、UTF-8-SIG 和 GB18030 解码；
-- Markdown（`.md`）：按文本文件解析；
-- JSON（`.json`）：验证语法并转换为格式化文本。
+- 确定性规则负责截止时间、格式、PDF 页数、JSON 合法性、完整文件关键词和证据冲突。
+- 成功解析的文件证据优先于用户 `submission_text` 声明。
+- LLM 只参与有实际可读材料、规则仍为 `NEEDS_REVIEW` 的语义标准。
+- LLM 不能覆盖确定性 `PASS/FAIL`、文件事实或空提交结论。
+- 无 API Key 时完整使用规则模式，文件验收和页面均可运行。
+- API 超时、认证、限流、拒绝或非法结构会自动保留规则结果并安全回退。
+- 证据链接只记录，不联网打开，也不证明链接目标内容。
 
-暂不支持 Word、Excel、图片 OCR、压缩包、音视频、网页抓取、GitHub API 和云盘文件。不支持的类型在解析工具层返回 `UNSUPPORTED`，不会导致整个 workflow 崩溃。
+详细流程见 [系统架构](docs/architecture.md) 和 [验收规则](docs/evaluation.md)。
 
-证据链接字段仍然保留，但只是链接记录。Agent 不会联网打开链接，也不会把链接内容当作已经读取。
-
-## 文件证据工作流
-
-1. Streamlit 读取上传文件的文件名、MIME 类型和字节。
-2. `parse_uploaded_file` 检查文件大小和扩展名，并调用对应解析器。
-3. 原始字节被转换为 Pydantic `FileEvidence`；二进制不会进入 Agent 输入、输出或日志。
-4. workflow 统计解析状态、PDF 页数、文本字符数和合法 JSON 数量。
-5. `build_file_evidence_context` 按 `[文件 1]`、`[文件 2]` 边界组织元数据和已提取文本。
-6. `classify_criterion_evidence_type` 先把标准分类为文件格式、页数、文件内容、JSON、链接、提交声明或人工复核。
-7. 文件可验证标准优先检查实际文件格式、页数、JSON 有效性和明确必需关键词；只有文件无法验证时才参考用户声明，且通常为 `NEEDS_REVIEW`。
-8. 不属于文件要求的提交说明型标准继续使用 Day 1 的直接声明规则。
-9. 聚合最终决策、生成建议、计算置信度并尽力写入安全日志。
-
-单个文件解析失败不会阻止其他文件或主 workflow。失败、加密、损坏或不支持的文件会明确保留状态和简短错误，但不会伪装成已读取成功。
-
-## 文件证据优先原则
-
-`submission_text` 是用户声明，不等于真实文件证据。证据优先级为：成功解析的文件内容、文件结构化元数据、用户提交说明、证据链接记录。成功解析的真实文件证据优先于用户自述。例如：
-
-- 验收标准：`简历控制在一页`
-- 提交说明：`简历已经控制在一页。`
-- 实际上传的 `resume.pdf`：pypdf 读取为 2 页
-- 单项结果：`FAIL`
-- 理由：用户说明与文件证据冲突，以实际文件解析结果为准
-- 最终结果：通常为 `NEEDS_REVISION`
-
-如果 PDF 无法读取页数，规则不会猜测，而是返回 `NEEDS_REVIEW`。
-
-对文件内容要求也采用同一原则：完整成功解析的文件明确缺少必需关键词时才可 `FAIL`；`PARTIAL`、`FAILED`、`UNSUPPORTED` 或文本已截断且未命中时一律为 `NEEDS_REVIEW`。没有上传文件时，即使用户声明“已经包含 Dify”，也只能得到 `NEEDS_REVIEW`。证据链接不会被打开，链接文字中出现关键词不能证明文件内容。
-
-## 状态与规则边界
-
-- `PASS`：真实文件足以确定满足文件标准，或标准本身明确要求填写提交说明且声明可直接核验。
-- `FAIL`：真实文件明确违反标准，或提交说明存在明确冲突。
-- `NEEDS_REVIEW`：证据不足、解析失败，或标准涉及主观与复杂语义。
-
-规则模式支持以下有限、可解释判断：
-
-- 明确要求 PDF；
-- 一页、最多一页、不超过两页等简单 PDF 页数限制；
-- 合法 JSON；
-- “包含 Deadline Box”“必须出现安装步骤”等明确内容关键词；
-- Day 1 的直接完成或明确未完成陈述。
-
-创新性、商业价值、专业程度、优秀代码质量等标准不会被假装自动判断，而是进入 `NEEDS_REVIEW`。详细规则见 [`docs/evaluation.md`](docs/evaluation.md)。
-
-## 安全限制
-
-- 单个文件最大 5 MB；超限返回 `FAILED`。
-- 每个文件最多保留 20,000 字符提取文本，超出时设置 `text_truncated=true`。
-- 页面预览最多显示 2,000 字符。
-- JSON 日志中的每个文件文本最多保存 1,000 字符预览。
-- 原始二进制永不写入日志。
-- 日志递归移除名称包含 `api_key`、`token` 或 `secret` 的字段。
-- 解析错误只保留简短信息，不保存堆栈。
-- 日志失败不会导致验收失败。
-
-## 技术栈
-
-- Python 3.10+
-- Pydantic 2
-- Streamlit
-- pypdf
-- pytest
-
-## 项目结构
-
-```text
-.
-├── agent/
-│   ├── __init__.py
-│   ├── schemas.py
-│   ├── file_tools.py
-│   ├── tools.py
-│   ├── workflow.py
-│   └── prompts.py
-├── docs/
-│   └── evaluation.md
-├── examples/
-│   ├── sample_input.json
-│   └── sample_output.json
-├── logs/
-│   └── .gitkeep
-├── tests/
-│   ├── test_workflow.py
-│   └── test_file_tools.py
-├── app.py
-├── requirements.txt
-└── README.md
-```
-
-## 本地运行
+## 快速运行
 
 ```powershell
 python -m venv .venv
@@ -120,37 +31,131 @@ python -m pip install -r requirements.txt
 python -m streamlit run app.py
 ```
 
-页面提供“加载示例”，并保留任务标题、截止时间、提交时间、验收标准、提交内容和证据链接字段。选择文件并点击“开始验收”后，会显示文件名、类型、大小、解析状态、PDF 页数、文本预览、文件摘要和完整 JSON。
+页面截图建议放在 `docs/images/app-overview.png`；提交展示材料时可在此处加入：
 
-代码调用方式仍兼容 Day 1：
-
-```python
-import json
-
-from agent.workflow import DeadlineReviewAgent
-
-with open("examples/sample_input.json", encoding="utf-8") as file:
-    payload = json.load(file)
-
-result = DeadlineReviewAgent().run(payload)
-print(result.model_dump_json(indent=2))
+```markdown
+![Deadline Review Agent 页面](docs/images/app-overview.png)
 ```
 
-`uploaded_files` 是可选字段，默认空列表。页面会先把上传内容解析成 `FileEvidence`，不会把 Streamlit `UploadedFile` 对象传入 workflow。
+## 三种实际评估模式
+
+- `rule_based`：用户选择仅规则，或自动模式下没有完整 LLM 配置。
+- `llm_enhanced`：至少一个符合条件的标准成功完成结构化语义复核。
+- `fallback_rule_based`：显式计划使用 LLM，但配置缺失、API 失败或输出非法，最终保留规则结果。
+
+页面提供：
+
+- 自动模式：存在 Key 和模型时，仅复核符合条件的 `NEEDS_REVIEW`。
+- 仅规则模式：绝不调用外部模型。
+- 启用 LLM 增强：尝试语义复核；不可用时安全回退。
+
+## LLM 路由与硬规则保护
+
+只有同时满足以下条件才调用 LLM：
+
+1. 原规则状态为 `NEEDS_REVIEW`；
+2. 标准类型为 `MANUAL_REVIEW`，或可语义复核的 `FILE_CONTENT`；
+3. 存在足够的实际可读文件文本；
+4. 标准不依赖未读取链接或外部事实；
+5. 用户未选择 `rule_only`；
+6. 已配置 `OPENAI_API_KEY` 和 `OPENAI_MODEL`。
+
+workflow 会保存确定性结果快照。原规则为 `PASS/FAIL` 时不进入 LLM；合并后还会再次恢复锁定结果。因此两页 PDF、错误格式、非法 JSON、完整文件明确缺词等事实不会被模型改写。
+
+LLM 的决定性 `PASS/FAIL` 只有在结构合法、证据和引用片段非空、且自评 confidence 不低于 `0.70` 时才接受。该 confidence 只是模型自评，不是统计学概率。
+
+## 最小化模型输入
+
+`select_relevant_evidence` 使用简单关键词在文件中选取有限上下文：
+
+- 每个文件最多若干片段；
+- 总文件证据不超过 6,000 字符；
+- 保留文件名、解析状态和截断标记；
+- 没有命中时只提供有限开头；
+- 不使用 embedding、向量数据库或 Agent 框架。
+
+调用使用官方 OpenAI Python SDK 的 Responses API Structured Outputs，返回内容由 Pydantic 二次校验，并设置 `store=False`。项目没有硬编码唯一真实模型名称，必须通过环境配置选择。
+
+## 环境配置
+
+复制 `.env.example` 中的字段到运行环境：
+
+```dotenv
+OPENAI_API_KEY=
+OPENAI_MODEL=
+OPENAI_TIMEOUT_SECONDS=20
+OPENAI_MAX_RETRIES=1
+```
+
+项目不会主动读取或打印 Key。当前不依赖 `python-dotenv`；请通过操作系统、部署平台或启动脚本注入环境变量。真实 `.env` 已被 `.gitignore` 忽略。
+
+## 文件支持与安全限制
+
+支持：
+
+- PDF：pypdf 页数与可提取文本；
+- TXT、Markdown：UTF-8、UTF-8-SIG、GB18030；
+- JSON：语法验证与格式化文本。
+
+限制：
+
+- 单个文件最大 5 MB；
+- 每个文件提取文本最多 20,000 字符；
+- 页面文件预览最多 2,000 字符；
+- 日志中文件文本最多 1,000 字符预览；
+- 不保存原始文件二进制、API Key、完整环境变量、隐私路径或异常堆栈。
+
+## 项目结构
+
+```text
+.
+├── agent/
+│   ├── schemas.py
+│   ├── file_tools.py
+│   ├── tools.py
+│   ├── llm_evaluator.py
+│   ├── workflow.py
+│   └── prompts.py
+├── docs/
+│   ├── architecture.md
+│   └── evaluation.md
+├── examples/
+│   ├── sample_input.json
+│   ├── sample_output.json
+│   ├── llm_review_input.json
+│   └── llm_review_output.json
+├── tests/
+│   ├── test_workflow.py
+│   ├── test_file_tools.py
+│   └── test_llm_evaluator.py
+├── app.py
+├── requirements.txt
+└── README.md
+```
+
+## 示例
+
+- `examples/sample_input.json`：无文件、无 LLM 的保守规则示例。
+- `examples/sample_output.json`：仅有用户声明时的 `NEEDS_REVIEW`。
+- `examples/llm_review_input.json`：文件硬规则与语义标准混合输入。
+- `examples/llm_review_output.json`：展示 `deterministic_rule` 与 `llm_semantic_review`。
 
 ## 测试
 
+所有 LLM 测试使用 mock，不访问网络、不产生 API 费用：
+
 ```powershell
-python -m pytest -q
+python -m pytest -q --basetemp=.pytest-temp
 ```
 
-当前共 44 个测试，实际结果为 `44 passed`。测试包含原有 Day 1 场景，以及 TXT、Markdown、JSON、PDF 页数、格式要求、文件关键词、证据优先级、用户声明冲突、部分解析、损坏文件、不支持类型、文件大小、文本截断和未读取链接等场景。
+当前共 65 个测试，覆盖 Day 1、Day 2、Day 2.5，以及无 Key、路由、结构化输出、超时、认证失败、非法状态、低置信度、空证据、硬规则保护、回退模式、日志脱敏、模型输入上限和完整演示输入路由。
 
 ## 当前限制
 
-- PDF 文本提取依赖 pypdf，不包含 OCR；扫描型 PDF 通常只能核对页数。
-- 不支持 Word、Excel、图片、压缩包、音视频和文件内嵌对象解析。
-- 不联网读取证据链接、网页、GitHub 或云盘内容。
-- 关键词规则只处理明确、有限的内容要求，不理解任意复杂自然语言。
-- 不调用真实 LLM API；`agent/prompts.py` 只保留未来语义评估接口占位。
-- 不含认证、数据库、多 Agent、支付或无关生产力功能。
+- 不读取网页、GitHub 或证据链接目标内容。
+- 不支持 OCR；扫描 PDF 可能只能读取页数。
+- 不支持 Word、Excel、图片、压缩包、音视频或云盘 API。
+- LLM 输出仍可能有误，只参与规则无法判断的有限语义标准。
+- 复杂业务价值、法律、专业质量等判断仍可能需要人工复核。
+- overall confidence 和 LLM confidence 都不是统计学概率。
+- 不包含认证、数据库、多 Agent、LangChain、LangGraph 或向量数据库。

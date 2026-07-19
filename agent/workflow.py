@@ -2,18 +2,24 @@
 
 from __future__ import annotations
 
+import os
 from pathlib import Path
 from typing import Any
 
 from pydantic import ValidationError
 
-from agent import file_tools, tools
+from agent import file_tools, llm_evaluator, tools
 from agent.schemas import (
+    CriterionEvidenceType,
     CriterionStatus,
     EvaluationMode,
+    EvaluatedBy,
+    EvidenceSource,
     FileEvidence,
     FileParseStatus,
     IntermediateStep,
+    LLMCallMetadata,
+    RequestedEvaluationMode,
     ReviewInput,
     ReviewOutput,
 )
@@ -22,8 +28,18 @@ from agent.schemas import (
 class DeadlineReviewAgent:
     """Run the backward-compatible rule-based review workflow."""
 
-    def __init__(self, log_dir: str | Path = "logs") -> None:
+    def __init__(
+        self,
+        log_dir: str | Path = "logs",
+        *,
+        llm_client: Any | None = None,
+        api_key: str | None = None,
+        llm_model: str | None = None,
+    ) -> None:
         self.log_dir = Path(log_dir)
+        self.llm_client = llm_client
+        self.api_key = api_key
+        self.llm_model = llm_model
 
     def run(self, review_input: ReviewInput | dict[str, Any]) -> ReviewOutput:
         steps: list[IntermediateStep] = []
@@ -77,6 +93,21 @@ class DeadlineReviewAgent:
             )
         )
 
+        criterion_types = [tools.classify_criterion_evidence_type(item) for item in parsed]
+        type_counts = {
+            evidence_type.value: sum(item == evidence_type for item in criterion_types)
+            for evidence_type in CriterionEvidenceType
+        }
+        used_types = "，".join(f"{name} {count}" for name, count in type_counts.items() if count)
+        steps.append(
+            self._step(
+                "classify_criterion_evidence_type",
+                "classify_criterion_evidence_type",
+                "SUCCESS",
+                f"验收标准证据类型分类完成：{used_types}。",
+            )
+        )
+
         results = [
             tools.evaluate_evidence_rule_based(
                 item,
@@ -86,6 +117,12 @@ class DeadlineReviewAgent:
             )
             for item in parsed
         ]
+        for result in results:
+            result.evaluated_by = (
+                EvaluatedBy.MANUAL_REVIEW_REQUIRED
+                if result.status == CriterionStatus.NEEDS_REVIEW
+                else EvaluatedBy.DETERMINISTIC_RULE
+            )
         counts = {status.value: sum(result.status == status for result in results) for status in CriterionStatus}
         steps.append(
             self._step(
@@ -106,6 +143,156 @@ class DeadlineReviewAgent:
                 else "未发现用户声明与成功解析文件之间的证据冲突。",
             )
         )
+
+        resolved_api_key = self.api_key if self.api_key is not None else os.getenv("OPENAI_API_KEY", "")
+        resolved_model = llm_evaluator.configured_model(self.llm_model)
+        llm_available = llm_evaluator.is_llm_available(resolved_api_key, resolved_model)
+        routed_indices = [
+            index
+            for index, (item, evidence_type, result) in enumerate(zip(parsed, criterion_types, results))
+            if llm_evaluator.should_use_llm_for_criterion(
+                item.criterion,
+                evidence_type,
+                result,
+                data.uploaded_files,
+                data.requested_evaluation_mode,
+                api_key=resolved_api_key,
+                model=resolved_model,
+            )
+        ]
+        deterministic_count = len(results) - len(routed_indices)
+        steps.append(
+            self._step(
+                "llm_routing",
+                "should_use_llm_for_criterion",
+                "SUCCESS",
+                f"{len(results)} 条标准中，{deterministic_count} 条保留确定性/人工规则结果，"
+                f"{len(routed_indices)} 条进入可选 LLM 语义复核。",
+            )
+        )
+
+        protected_results = [result.model_copy(deep=True) for result in results]
+        llm_attempts = 0
+        llm_successes = 0
+        fallback_errors: list[str] = []
+        for index in routed_indices:
+            llm_attempts += 1
+            original = protected_results[index]
+            excerpts = llm_evaluator.select_relevant_evidence(
+                parsed[index].criterion,
+                data.uploaded_files,
+            )
+            safe_result = llm_evaluator.safe_llm_evaluate(
+                criterion=parsed[index].criterion,
+                submission_text=data.submission_text,
+                relevant_file_excerpts=excerpts,
+                file_metadata_summary=llm_evaluator.build_file_metadata_summary(data.uploaded_files),
+                deterministic_findings=(
+                    f"规则状态={original.status.value}；规则理由={original.reason}；"
+                    "原规则 PASS/FAIL 不允许改写；当前仅复核 NEEDS_REVIEW。"
+                ),
+                api_key=resolved_api_key,
+                model=resolved_model,
+                client=self.llm_client,
+            )
+            metadata = LLMCallMetadata(
+                attempted=True,
+                success=safe_result.success,
+                model=safe_result.model,
+                latency_ms=safe_result.latency_ms,
+                error_type=safe_result.error_type,
+                safe_error_message=safe_result.safe_error_message,
+                fallback_used=not safe_result.success,
+            )
+            results[index].rule_status_before_llm = original.status
+            results[index].llm_metadata = metadata
+            if not safe_result.success or safe_result.result is None:
+                results[index].evaluated_by = EvaluatedBy.MANUAL_REVIEW_REQUIRED
+                fallback_errors.append(safe_result.error_type or "unknown_error")
+                continue
+
+            llm_successes += 1
+            semantic = safe_result.result
+            results[index].llm_evaluation = semantic
+            can_accept_decisive = (
+                semantic.status in {CriterionStatus.PASS, CriterionStatus.FAIL}
+                and semantic.confidence >= llm_evaluator.LLM_ACCEPTANCE_CONFIDENCE
+                and bool(semantic.evidence)
+                and bool(semantic.evidence_excerpt.strip())
+            )
+            results[index].evaluated_by = EvaluatedBy.LLM_SEMANTIC_REVIEW
+            results[index].evidence_source = EvidenceSource.FILE_CONTENT
+            results[index].source_files = [
+                file.filename
+                for file in data.uploaded_files
+                if file.parse_status in {FileParseStatus.SUCCESS, FileParseStatus.PARTIAL}
+                and file.extracted_text
+            ]
+            results[index].evidence = [
+                *semantic.evidence,
+                f"LLM 引用片段：{semantic.evidence_excerpt[:500]}",
+            ]
+            results[index].reason = semantic.reason
+            results[index].suggested_action = semantic.suggested_action
+            if semantic.status == CriterionStatus.NEEDS_REVIEW or not can_accept_decisive:
+                results[index].status = CriterionStatus.NEEDS_REVIEW
+                if semantic.status != CriterionStatus.NEEDS_REVIEW:
+                    results[index].reason = (
+                        f"LLM 结果未达到接受门槛（confidence={semantic.confidence:.2f}，"
+                        "或缺少具体证据），保持 NEEDS_REVIEW。"
+                    )
+            else:
+                results[index].status = semantic.status
+
+        steps.append(
+            self._step(
+                "llm_semantic_evaluation",
+                "safe_llm_evaluate / Responses API",
+                "SUCCESS" if llm_attempts == llm_successes else ("WARNING" if llm_attempts else "SKIPPED"),
+                f"实际尝试 {llm_attempts} 次 LLM 复核，结构化成功 {llm_successes} 次。"
+                if llm_attempts
+                else "本次没有符合路由条件的标准，未调用 LLM。",
+            )
+        )
+
+        explicit_unavailable = (
+            data.requested_evaluation_mode == RequestedEvaluationMode.LLM_ENABLED
+            and not llm_available
+        )
+        fallback_used = bool(fallback_errors or explicit_unavailable)
+        if explicit_unavailable:
+            fallback_errors.append("missing_llm_configuration")
+        steps.append(
+            self._step(
+                "fallback_handling",
+                "safe_llm_evaluate",
+                "WARNING" if fallback_used else "SUCCESS",
+                f"发生安全回退：{len(fallback_errors)} 项，错误类型：{'、'.join(fallback_errors)}。"
+                if fallback_used
+                else "未发生 LLM 失败回退。",
+            )
+        )
+
+        locked_count = 0
+        for index, original in enumerate(protected_results):
+            if original.status in {CriterionStatus.PASS, CriterionStatus.FAIL}:
+                locked_count += 1
+                results[index] = original
+        steps.append(
+            self._step(
+                "deterministic_result_protection",
+                "workflow deterministic lock",
+                "SUCCESS",
+                f"已锁定 {locked_count} 条确定性 PASS/FAIL；LLM 未被允许覆盖硬规则或文件事实。",
+            )
+        )
+
+        if llm_successes:
+            actual_evaluation_mode = EvaluationMode.LLM_ENHANCED
+        elif fallback_used:
+            actual_evaluation_mode = EvaluationMode.FALLBACK_RULE_BASED
+        else:
+            actual_evaluation_mode = EvaluationMode.RULE_BASED
 
         severely_incomplete = (
             not data.submission_text.strip()
@@ -131,13 +318,20 @@ class DeadlineReviewAgent:
             )
         )
 
-        confidence = self._calculate_confidence(results, severely_incomplete, data.uploaded_files)
+        confidence = self._calculate_confidence(
+            results,
+            severely_incomplete,
+            data.uploaded_files,
+            llm_attempts=llm_attempts,
+            llm_successes=llm_successes,
+            fallback_used=fallback_used,
+        )
         steps.append(
             self._step(
                 "calculate_confidence",
                 "workflow.calculate_confidence",
                 "SUCCESS",
-                f"规则评估置信度为 {confidence:.2f}。",
+                f"综合确定性结果、文件完整性、LLM 参与和回退情况，置信度为 {confidence:.2f}。",
             )
         )
         steps.append(
@@ -156,7 +350,11 @@ class DeadlineReviewAgent:
             criteria_results=results,
             next_actions=next_actions,
             intermediate_steps=steps,
-            evaluation_mode=EvaluationMode.RULE_BASED,
+            evaluation_mode=actual_evaluation_mode,
+            requested_evaluation_mode=data.requested_evaluation_mode,
+            llm_available=llm_available,
+            llm_model=resolved_model,
+            llm_fallback_used=fallback_used,
             file_evidence_results=data.uploaded_files,
             file_evidence_summary=file_summary,
         )
@@ -194,6 +392,10 @@ class DeadlineReviewAgent:
         results: list[Any],
         severely_incomplete: bool,
         uploaded_files: list[FileEvidence] | None = None,
+        *,
+        llm_attempts: int = 0,
+        llm_successes: int = 0,
+        fallback_used: bool = False,
     ) -> float:
         if severely_incomplete:
             return 0.98
@@ -207,10 +409,25 @@ class DeadlineReviewAgent:
             for file in uploaded_files
         ):
             parsed_file_bonus = 0.02
-        return round(
-            min(0.98, 0.55 + 0.35 * determinate / len(results) + 0.08 * evidence_ratio + parsed_file_bonus),
-            2,
+        deterministic_ratio = sum(
+            result.evaluated_by == EvaluatedBy.DETERMINISTIC_RULE for result in results
+        ) / len(results)
+        llm_ratio = llm_successes / len(results)
+        conflict_penalty = 0.04 if any(result.conflict_detected for result in results) else 0.0
+        fallback_penalty = 0.08 if fallback_used else 0.0
+        unused_attempt_penalty = 0.02 if llm_attempts > llm_successes and not fallback_used else 0.0
+        score = (
+            0.48
+            + 0.32 * determinate / len(results)
+            + 0.08 * evidence_ratio
+            + 0.06 * deterministic_ratio
+            + parsed_file_bonus
+            - 0.04 * llm_ratio
+            - fallback_penalty
+            - conflict_penalty
+            - unused_attempt_penalty
         )
+        return round(max(0.0, min(0.98, score)), 2)
 
     @staticmethod
     def _summarize_files(files: list[FileEvidence]) -> str:

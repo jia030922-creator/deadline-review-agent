@@ -1,0 +1,28 @@
+{
+  "task_title": "简历交付语义验收",
+  "due_at": "2026-07-19T18:00:00+08:00",
+  "submitted_at": "2026-07-19T17:30:00+08:00",
+  "acceptance_criteria": [
+    "必须提交 PDF",
+    "简历控制在一页",
+    "文档中必须包含 Deadline Box",
+    "项目描述应清楚说明问题、解决方案和结果",
+    "修改建议应具体可执行"
+  ],
+  "submission_text": "已提交一页简历，并补充项目说明和修改建议。",
+  "evidence_links": [],
+  "uploaded_files": [
+    {
+      "filename": "resume.pdf",
+      "extension": ".pdf",
+      "mime_type": "application/pdf",
+      "size_bytes": 84211,
+      "page_count": 1,
+      "extracted_text": "Deadline Box 项目。问题：团队经常错过截止时间。解决方案：实现截止提醒和任务验收流程。结果：迟交率下降 30%。修改建议：增加失败重试提示，并为每项建议标注负责人和完成日期。",
+      "parse_status": "SUCCESS",
+      "parse_error": null,
+      "text_truncated": false
+    }
+  ],
+  "requested_evaluation_mode": "llm_enabled"
+}

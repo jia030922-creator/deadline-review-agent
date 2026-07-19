@@ -10,7 +10,7 @@ import streamlit as st
 from pydantic import ValidationError
 
 from agent.file_tools import parse_uploaded_file
-from agent.schemas import FileEvidence, FileParseStatus, ReviewInput
+from agent.schemas import FileEvidence, FileParseStatus, RequestedEvaluationMode, ReviewInput
 from agent.workflow import DeadlineReviewAgent
 
 
@@ -32,6 +32,7 @@ def load_sample() -> None:
             "acceptance_criteria": "\n".join(sample["acceptance_criteria"]),
             "submission_text": sample["submission_text"],
             "evidence_links": "\n".join(sample["evidence_links"]),
+            "requested_evaluation_mode": "auto",
         }
     )
 
@@ -47,6 +48,7 @@ def initialize_defaults() -> None:
         "acceptance_criteria": "",
         "submission_text": "",
         "evidence_links": "",
+        "requested_evaluation_mode": "auto",
     }
     for key, value in defaults.items():
         st.session_state.setdefault(key, value)
@@ -104,6 +106,20 @@ with st.form("review_form"):
     )
     st.text_area("提交内容", key="submission_text", height=180)
     st.text_area("证据链接（每行一个）", key="evidence_links", height=100)
+    st.selectbox(
+        "评估模式",
+        options=[mode.value for mode in RequestedEvaluationMode],
+        key="requested_evaluation_mode",
+        format_func=lambda value: {
+            "auto": "自动模式",
+            "rule_only": "仅规则模式",
+            "llm_enabled": "启用 LLM 增强",
+        }[value],
+        help=(
+            "自动模式：配置 API Key 和模型后，只复核规则无法判断的复杂标准；"
+            "仅规则模式：不调用外部模型；启用 LLM 增强：尝试语义复核，失败自动回退。"
+        ),
+    )
     uploaded = st.file_uploader(
         "交付文件（可多选，单个文件建议不超过 5 MB）",
         type=["pdf", "txt", "md", "json"],
@@ -123,6 +139,7 @@ if submitted:
             submission_text=st.session_state.submission_text,
             evidence_links=lines(st.session_state.evidence_links),
             uploaded_files=file_evidence,
+            requested_evaluation_mode=st.session_state.requested_evaluation_mode,
         )
         result = DeadlineReviewAgent(log_dir=ROOT / "logs").run(payload)
     except ValidationError as exc:
@@ -134,10 +151,23 @@ if submitted:
     else:
         st.divider()
         st.subheader("验收结论")
-        first, second, third = st.columns(3)
+        first, second, third, fourth = st.columns(4)
         first.metric("最终决策", result.final_decision.value)
         second.metric("时间状态", result.task_status.value)
         third.metric("置信度", f"{result.confidence:.0%}")
+        fourth.metric("实际评估模式", result.evaluation_mode.value)
+
+        st.subheader("LLM 语义复核状态")
+        llm_left, llm_middle, llm_right = st.columns(3)
+        llm_left.write(f"LLM 可用：{'是' if result.llm_available else '否'}")
+        llm_middle.write(f"模型：{result.llm_model or '未配置'}")
+        llm_right.write(f"发生回退：{'是' if result.llm_fallback_used else '否'}")
+        if (
+            result.requested_evaluation_mode == RequestedEvaluationMode.LLM_ENABLED
+            and not result.llm_available
+        ):
+            st.warning("已选择 LLM 增强，但未配置 OPENAI_API_KEY 或 OPENAI_MODEL；已安全回退规则模式。")
+        st.caption("API Key 不会在页面、结果或日志中显示。LLM 不能覆盖文件格式、页数、JSON 或其他硬规则。")
 
         st.subheader("文件解析摘要")
         st.write(result.file_evidence_summary)
@@ -170,7 +200,8 @@ if submitted:
         for index, item in enumerate(result.criteria_results, start=1):
             with st.expander(f"{index}. [{item.status.value}] {item.criterion}", expanded=True):
                 st.caption(
-                    f"证据类型：{item.evidence_type.value} · 证据来源：{item.evidence_source.value}"
+                    f"证据类型：{item.evidence_type.value} · 证据来源：{item.evidence_source.value} · "
+                    f"评估者：{item.evaluated_by.value}"
                 )
                 if item.source_files:
                     st.write(f"来源文件：{'、'.join(item.source_files)}")
@@ -183,6 +214,20 @@ if submitted:
                 ):
                     st.warning("仅有用户声明，尚未通过真实文件验证。")
                 st.write(item.reason)
+                if item.llm_metadata.attempted:
+                    if item.llm_metadata.success:
+                        st.success(
+                            f"LLM 结构化复核成功 · 模型 {item.llm_metadata.model or '未知'} · "
+                            f"{item.llm_metadata.latency_ms} ms"
+                        )
+                        if item.llm_evaluation:
+                            st.caption(
+                                f"模型自评 confidence：{item.llm_evaluation.confidence:.0%}（非统计学概率）"
+                            )
+                            if item.llm_evaluation.limitations:
+                                st.write("复核限制：" + "；".join(item.llm_evaluation.limitations))
+                    else:
+                        st.warning(item.llm_metadata.safe_error_message or "LLM 复核失败，已保留规则结果。")
                 if item.evidence:
                     st.markdown("**证据**")
                     for evidence in item.evidence:
