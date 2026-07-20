@@ -159,3 +159,10 @@ python -m pytest -q --basetemp=.pytest-temp
 - 复杂业务价值、法律、专业质量等判断仍可能需要人工复核。
 - overall confidence 和 LLM confidence 都不是统计学概率。
 - 不包含认证、数据库、多 Agent、LangChain、LangGraph 或向量数据库。
+
+
+运行：
+git clone 仓库地址
+cd deadline-review-agent
+python -m pip install -r requirements.txt
+python -m streamlit run app.py
